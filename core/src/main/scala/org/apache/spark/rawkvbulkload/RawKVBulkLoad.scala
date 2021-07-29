@@ -1,10 +1,10 @@
 package org.apache.spark.rawkvbulkload
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import com.pingcap.tikv.codec.KeyUtils
-import com.pingcap.tikv.key.Key
-import com.pingcap.tikv.region.TiRegion
-import com.pingcap.tikv.util.FastByteComparisons
+import org.tikv.common.codec.KeyUtils
+import org.tikv.common.key.Key
+import org.tikv.common.region.TiRegion
+import org.tikv.common.util.FastByteComparisons
 import org.tikv.common.{TiConfiguration, TiSession}
 import org.apache.spark.{Partitioner, SparkConf}
 import org.apache.spark.rdd.RDD
