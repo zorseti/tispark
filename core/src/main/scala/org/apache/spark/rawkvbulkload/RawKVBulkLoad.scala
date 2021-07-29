@@ -1,7 +1,6 @@
 package org.apache.spark.rawkvbulkload
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import com.google.protobuf.ByteString
 import com.pingcap.tikv.codec.KeyUtils
 import com.pingcap.tikv.key.Key
 import com.pingcap.tikv.region.TiRegion
@@ -16,10 +15,10 @@ import org.slf4j.LoggerFactory
 import org.tikv.common.importer.{ImporterClient, SwitchTiKVModeClient}
 import org.apache.spark.rawkvbulkload.SerializableKey
 import org.tikv.shade.com.google.protobuf.ByteString
-
 import java.util
 import java.util.UUID
 import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
+
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
@@ -45,7 +44,9 @@ object RawKVBulkLoad {
 
     val spark = SparkSession.builder.config(sparkConf).getOrCreate()
     // TODO get parquet in correct schema
-    val rdd = spark.read.parquet(input)
+    val rdd = spark.read.parquet(input).rdd.map(row => {
+      (row.getString(0).toArray.map(_.toByte), row.getString(1).toArray.map(_.toByte))
+    })
     //    init ticklient
 
     val conf = TiConfiguration.createDefault(pdaddr)
@@ -126,12 +127,12 @@ class RawKVBulkLoad extends Serializable {
     logger.info("rdd3.getNumPartitions = " + rdd3.getNumPartitions)
 
     // call writeAndIngest for each partition
-    (1 to ingestNumber).foreach { i =>
-      logger.info(s"writeAndIngest round: $i")
+//    (1 to ingestNumber).foreach { i =>
+//      logger.info(s"writeAndIngest round: $i")
       rdd3.foreachPartition { itor =>
         writeAndIngest(itor.map(pair => (pair._1.bytes, pair._2)), partitioner)
       }
-    }
+  //  }
   }
 
   private def writeAndIngest(iterator: Iterator[(Array[Byte], Array[Byte])], partitioner: TiReginSplitPartitionerV2): Unit = {
@@ -167,7 +168,8 @@ class RawKVBulkLoad extends Serializable {
           new BytePairWrapper(keyValue._1, keyValue._2)
         }.asJava
         // TODO ttl
-        var importerClient = new ImporterClient(tiSession, uuid, minKey, maxKey, region,12)
+
+        var importerClient = new ImporterClient(tiSession, ByteString.copyFrom(uuid), minKey, maxKey, region,12)
         importerClient.rawWrite(pairsIterator)
         //        val importSSTManager = new ImportSSTManager(uuid, TiSession.getInstance(tiConf), minKey, maxKey, region)
         //        importSSTManager.write(pairsIterator)
