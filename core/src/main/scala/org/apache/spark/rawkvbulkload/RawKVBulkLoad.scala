@@ -1,30 +1,29 @@
 package org.apache.spark.rawkvbulkload
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import org.tikv.common.codec.KeyUtils
-import org.tikv.common.key.Key
-import org.tikv.common.region.TiRegion
-import org.tikv.common.util.FastByteComparisons
-import org.tikv.common.{TiConfiguration, TiSession}
-import org.apache.spark.{Partitioner, SparkConf}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.sql.Row
+import org.apache.spark.{Partitioner, SparkConf}
 import org.slf4j.LoggerFactory
+import org.tikv.common.codec.KeyUtils
 import org.tikv.common.importer.{ImporterClient, SwitchTiKVModeClient}
-import org.apache.spark.rawkvbulkload.SerializableKey
+import org.tikv.common.key.Key
+import org.tikv.common.region.TiRegion
+import org.tikv.common.util.{FastByteComparisons, Pair}
+import org.tikv.common.{TiConfiguration, TiSession}
 import org.tikv.shade.com.google.protobuf.ByteString
+
 import java.util
 import java.util.UUID
-import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
-
+import java.util.concurrent.{Executors, ScheduledExecutorService}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
 object RawKVBulkLoad {
   var input: String = null
   var pdaddr: String = null
+
   def main(args: Array[String]): Unit = {
 
 
@@ -91,7 +90,7 @@ class RawKVBulkLoad extends Serializable {
     val orderedSplitPoints = getRegionSplitPoints(rdd2)
 
     // 4 switch to normal mode
-    val switchTiKVModeClient = new SwitchTiKVModeClient(tiSession.getPDClient,tiSession.getImporterRegionStoreClientBuilder)
+    val switchTiKVModeClient = new SwitchTiKVModeClient(tiSession.getPDClient, tiSession.getImporterRegionStoreClientBuilder)
     switchTiKVModeClient.switchTiKVToNormalMode()
     //    tiSession.getImportSSTClient.switchTiKVToNormalMode()
 
@@ -123,12 +122,12 @@ class RawKVBulkLoad extends Serializable {
     logger.info("rdd3.getNumPartitions = " + rdd3.getNumPartitions)
 
     // call writeAndIngest for each partition
-//    (1 to ingestNumber).foreach { i =>
-//      logger.info(s"writeAndIngest round: $i")
-      rdd3.foreachPartition { itor =>
-        writeAndIngest(itor.map(pair => (pair._1.bytes, pair._2)), partitioner)
-      }
-  //  }
+    //    (1 to ingestNumber).foreach { i =>
+    //      logger.info(s"writeAndIngest round: $i")
+    rdd3.foreachPartition { itor =>
+      writeAndIngest(itor.map(pair => (pair._1.bytes, pair._2)), partitioner)
+    }
+    //  }
     switchTiKVModeClient.stopKeepTiKVToImportMode()
     switchTiKVModeClient.switchTiKVToNormalMode()
   }
@@ -143,30 +142,31 @@ class RawKVBulkLoad extends Serializable {
     val dataSize = itor1.map { itor =>
       key = Key.toRawKey(itor._1)
 
-      if(region == null) {
+      if (region == null) {
         region = partitioner.getRegion(key)
       }
 
-      if(key.compareTo(minKey) < 0) {
+      if (key.compareTo(minKey) < 0) {
         minKey = key
       }
-      if(key.compareTo(maxKey) > 0) {
+      if (key.compareTo(maxKey) > 0) {
         maxKey = key
       }
     }.size
 
-    if(dataSize > 0) {
+    if (dataSize > 0) {
       if (region == null) {
         logger.warn("region == null, skip ingest this partition")
       } else {
         val uuid = genUUID()
 
         logger.warn(s"start to ingest this partition ${util.Arrays.toString(uuid)}")
-        val pairsIterator = tiro2.map { keyValue =>
-          new BytePairWrapper(keyValue._1, keyValue._2)
+        val pairsIterator = tiro2.map { keyValue => new Pair[ByteString, ByteString](ByteString.copyFrom(keyValue._1), ByteString.copyFrom(keyValue._2))
+
         }.asJava
         // TODO ttl
-        var importerClient = new ImporterClient(tiSession, ByteString.copyFrom(uuid), minKey, maxKey, region,12)
+
+        var importerClient = new ImporterClient(tiSession, ByteString.copyFrom(uuid), minKey, maxKey, region, 12)
         importerClient.rawWrite(pairsIterator)
         //        val importSSTManager = new ImportSSTManager(uuid, TiSession.getInstance(tiConf), minKey, maxKey, region)
         //        importSSTManager.write(pairsIterator)
@@ -174,6 +174,7 @@ class RawKVBulkLoad extends Serializable {
       }
     }
   }
+
   // TODO get ByteString type uuid
   private def genUUID(): Array[Byte] = {
     val uuid = UUID.randomUUID()
@@ -223,7 +224,7 @@ class RawKVBulkLoad extends Serializable {
     val sampleSize = (regionSplitPointNum + 1) * optionsSampleSplitFrac
     logger.info(s"sampleSize=$sampleSize")
 
-    val sampleData = if(sampleSize < count) {
+    val sampleData = if (sampleSize < count) {
       rdd.sample(false, sampleSize.toDouble / count).collect()
     } else {
       rdd.collect()
@@ -280,7 +281,6 @@ class RawKVBulkLoad extends Serializable {
 }
 
 
-
 class SerializableKey(val bytes: Array[Byte])
   extends Comparable[SerializableKey]
     with Serializable {
@@ -333,16 +333,16 @@ class TiReginSplitPartitionerV2(orderedRegions: List[TiRegion])
     val serializableKey = key.asInstanceOf[SerializableKey]
     val rawKey = Key.toRawKey(serializableKey.bytes)
 
-    if(orderedRegions.isEmpty) {
+    if (orderedRegions.isEmpty) {
       0
     } else {
       val firstRegion = orderedRegions.head
-      if(rawKey.compareTo(getRowStartKey(firstRegion)) < 0) {
+      if (rawKey.compareTo(getRowStartKey(firstRegion)) < 0) {
         0
-      }  else {
+      } else {
         orderedRegions.indices.foreach { i =>
           val region = orderedRegions(i)
-          if(rawKey.compareTo(getRowStartKey(region)) >= 0 && rawKey.compareTo(getRowEndKey(region)) < 0) {
+          if (rawKey.compareTo(getRowStartKey(region)) >= 0 && rawKey.compareTo(getRowEndKey(region)) < 0) {
             return i + 1
           }
         }
@@ -353,18 +353,20 @@ class TiReginSplitPartitionerV2(orderedRegions: List[TiRegion])
 
   def getRegion(key: Key): TiRegion = {
     orderedRegions.foreach { region =>
-      if(key.compareTo(getRowStartKey(region)) >= 0 && key.compareTo(getRowEndKey(region)) < 0) {
+      if (key.compareTo(getRowStartKey(region)) >= 0 && key.compareTo(getRowEndKey(region)) < 0) {
         return region
       }
     }
     null
   }
+
   // not support in TiRegion, add manually
-  private def  getRowStartKey(region:TiRegion):Key={
+  private def getRowStartKey(region: TiRegion): Key = {
     if (region.getStartKey.isEmpty) return Key.MIN
     return Key.toRawKey(region.getStartKey)
   }
-  private def getRowEndKey(region:TiRegion):Key={
+
+  private def getRowEndKey(region: TiRegion): Key = {
     return Key.toRawKey(region.getEndKey())
   }
 
@@ -372,6 +374,7 @@ class TiReginSplitPartitionerV2(orderedRegions: List[TiRegion])
     orderedRegions.size + 2
   }
 }
+
 class BytePairWrapper(val key: Array[Byte], val value: Array[Byte]) {
   def getKey: Array[Byte] = key
 
