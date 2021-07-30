@@ -25,18 +25,15 @@ import scala.collection.mutable
 object RawKVBulkLoad {
   var input: String = null
   var pdaddr: String = null
-  var ingestNumber: Int = 1
   def main(args: Array[String]): Unit = {
 
 
     args.sliding(2, 2).toList.collect {
       case Array("--input", argInput: String) => input = argInput
       case Array("--pdaddr", argPdAddr: String) => pdaddr = argPdAddr
-      case Array("--ingestNumber", argIngestNumber: String) => ingestNumber = argIngestNumber.toInt
     }
     assert(input != null, "should set --input")
     assert(pdaddr != null, "should set --pdaddr")
-    val start = System.currentTimeMillis()
 
     val sparkConf = new SparkConf()
       .setIfMissing("spark.master", "local[*]")
@@ -52,8 +49,7 @@ object RawKVBulkLoad {
     val conf = TiConfiguration.createDefault(pdaddr)
     new RawKVBulkLoad().bulkLoad(conf, rdd)
 
-    val end = System.currentTimeMillis()
-    println("total seconds: " + (end - start) / 1000)
+
   }
 }
 
@@ -133,6 +129,8 @@ class RawKVBulkLoad extends Serializable {
         writeAndIngest(itor.map(pair => (pair._1.bytes, pair._2)), partitioner)
       }
   //  }
+    switchTiKVModeClient.stopKeepTiKVToImportMode()
+    switchTiKVModeClient.switchTiKVToNormalMode()
   }
 
   private def writeAndIngest(iterator: Iterator[(Array[Byte], Array[Byte])], partitioner: TiReginSplitPartitionerV2): Unit = {
@@ -168,7 +166,6 @@ class RawKVBulkLoad extends Serializable {
           new BytePairWrapper(keyValue._1, keyValue._2)
         }.asJava
         // TODO ttl
-
         var importerClient = new ImporterClient(tiSession, ByteString.copyFrom(uuid), minKey, maxKey, region,12)
         importerClient.rawWrite(pairsIterator)
         //        val importSSTManager = new ImportSSTManager(uuid, TiSession.getInstance(tiConf), minKey, maxKey, region)
@@ -193,7 +190,6 @@ class RawKVBulkLoad extends Serializable {
     out
   }
 
-  //TODO getRegionByKey region.getRowEndKey
   private def getRegionInfo(min: Key, max: Key): List[TiRegion] = {
     val regions = new mutable.ArrayBuffer[TiRegion]()
 
@@ -204,7 +200,7 @@ class RawKVBulkLoad extends Serializable {
     while (current.compareTo(max) <= 0) {
       val region = tiSession.getRegionManager.getRegionByKey(current.toByteString)
       regions.append(region)
-      current = region.getRowEndKey
+      current = Key.toRawKey(region.getEndKey())
     }
 
     regions.toList
@@ -365,7 +361,7 @@ class TiReginSplitPartitionerV2(orderedRegions: List[TiRegion])
   }
   // not support in TiRegion, add manually
   private def  getRowStartKey(region:TiRegion):Key={
-    if (region.getStartKey.isEmpty) return region.
+    if (region.getStartKey.isEmpty) return Key.MIN
     return Key.toRawKey(region.getStartKey)
   }
   private def getRowEndKey(region:TiRegion):Key={
